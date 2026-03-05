@@ -14,7 +14,17 @@ async function redisGet(): Promise<any[] | null> {
   );
   const data = await res.json();
   if (!data.result) return null;
-  return typeof data.result === 'string' ? JSON.parse(data.result) : data.result;
+
+  let parsed = data.result;
+  // 문자열이면 배열이 될 때까지 파싱 (이중 인코딩 대응)
+  while (typeof parsed === 'string') {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return null;
+    }
+  }
+  return Array.isArray(parsed) ? parsed : null;
 }
 
 async function redisSet(value: any[]): Promise<void> {

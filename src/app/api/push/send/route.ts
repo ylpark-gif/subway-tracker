@@ -22,12 +22,26 @@ export async function POST() {
       subs.map(sub => webpush.sendNotification(sub, payload))
     );
 
-    const validSubs = subs.filter((_: any, i: number) => results[i].status === 'fulfilled');
+    // 410 Gone만 구독 삭제 (만료된 구독), 일시적 에러는 유지
+    const validSubs = subs.filter((_: any, i: number) => {
+      if (results[i].status === 'rejected') {
+        const err = (results[i] as PromiseRejectedResult).reason;
+        return err?.statusCode !== 410;
+      }
+      return true;
+    });
     await saveSubscriptions(validSubs);
+
+    const errors = results
+      .map((r, i) => r.status === 'rejected'
+        ? { endpoint: subs[i]?.endpoint?.slice(0, 60), error: (r as PromiseRejectedResult).reason?.message, statusCode: (r as PromiseRejectedResult).reason?.statusCode }
+        : null)
+      .filter(Boolean);
 
     return NextResponse.json({
       sent: results.filter(r => r.status === 'fulfilled').length,
       failed: results.filter(r => r.status === 'rejected').length,
+      errors,
     });
   } catch (err: any) {
     return NextResponse.json({ error: err.message, stack: err.stack }, { status: 500 });
