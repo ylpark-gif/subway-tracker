@@ -108,10 +108,15 @@ export default function Home() {
       {/* 헤더 */}
       <header className="bg-white shadow-sm border-b border-gray-100">
         <div className="max-w-3xl mx-auto px-4 py-4">
-          <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-            🚇 서울 지하철 실시간 추적
-          </h1>
-          <p className="text-xs text-gray-400 mt-1">배달의민족처럼 내 열차를 실시간으로 확인하세요</p>
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                🚇 서울 지하철 실시간 추적
+              </h1>
+              <p className="text-xs text-gray-400 mt-1">배달의민족처럼 내 열차를 실시간으로 확인하세요</p>
+            </div>
+            <PushNotificationToggle />
+          </div>
         </div>
       </header>
 
@@ -126,9 +131,6 @@ export default function Home() {
           targetDirection="up"
           directionLabel="약수·이태원 방면"
         />
-
-        {/* 출근 알림 설정 */}
-        <PushNotificationToggle />
 
         {/* 노선도 시각화 */}
         {route && (
