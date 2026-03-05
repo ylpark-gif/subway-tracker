@@ -1,29 +1,47 @@
-import fs from 'fs';
-import path from 'path';
-
-const SUBS_FILE = path.join(process.cwd(), '.push-subscriptions.json');
 const REDIS_KEY = 'push-subscriptions';
 
-// Upstash Redis 사용 여부 (환경변수로 판단)
 function useRedis() {
   return !!(process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN);
 }
 
-async function getRedis() {
-  const { Redis } = await import('@upstash/redis');
-  return new Redis({
-    url: process.env.UPSTASH_REDIS_REST_URL!,
-    token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-  });
+async function redisGet(): Promise<any[] | null> {
+  const res = await fetch(
+    `${process.env.UPSTASH_REDIS_REST_URL}/get/${REDIS_KEY}`,
+    {
+      headers: { Authorization: `Bearer ${process.env.UPSTASH_REDIS_REST_TOKEN}` },
+      cache: 'no-store',
+    }
+  );
+  const data = await res.json();
+  if (!data.result) return null;
+  return typeof data.result === 'string' ? JSON.parse(data.result) : data.result;
+}
+
+async function redisSet(value: any[]): Promise<void> {
+  await fetch(
+    `${process.env.UPSTASH_REDIS_REST_URL}/set/${REDIS_KEY}`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${process.env.UPSTASH_REDIS_REST_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(JSON.stringify(value)),
+      cache: 'no-store',
+    }
+  );
 }
 
 export async function loadSubscriptions(): Promise<any[]> {
   if (useRedis()) {
-    const redis = await getRedis();
-    const data = await redis.get<any[]>(REDIS_KEY);
+    const data = await redisGet();
     return data ?? [];
   }
 
+  // 로컬 개발용 파일 기반
+  const fs = await import('fs');
+  const path = await import('path');
+  const SUBS_FILE = path.join(process.cwd(), '.push-subscriptions.json');
   try {
     if (fs.existsSync(SUBS_FILE)) {
       return JSON.parse(fs.readFileSync(SUBS_FILE, 'utf-8'));
@@ -34,11 +52,13 @@ export async function loadSubscriptions(): Promise<any[]> {
 
 export async function saveSubscriptions(subs: any[]): Promise<void> {
   if (useRedis()) {
-    const redis = await getRedis();
-    await redis.set(REDIS_KEY, subs);
+    await redisSet(subs);
     return;
   }
 
+  const fs = await import('fs');
+  const path = await import('path');
+  const SUBS_FILE = path.join(process.cwd(), '.push-subscriptions.json');
   fs.writeFileSync(SUBS_FILE, JSON.stringify(subs, null, 2));
 }
 
