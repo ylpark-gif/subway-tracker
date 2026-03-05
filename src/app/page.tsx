@@ -1,65 +1,163 @@
-import Image from "next/image";
+'use client';
+
+import { useEffect, useMemo } from 'react';
+import { useRouteStore } from '@/stores/routeStore';
+import { useTrackingStore } from '@/stores/trackingStore';
+import { useRealtimePosition } from '@/hooks/useRealtimePosition';
+import { useRealtimeArrival } from '@/hooks/useRealtimeArrival';
+import { useCongestion } from '@/hooks/useCongestion';
+import { calculateProgress } from '@/services/routeCalculator';
+import { StationSearch } from '@/components/search/StationSearch';
+import { DeliveryStyleTracker } from '@/components/progress/DeliveryStyleTracker';
+import { RouteMapView } from '@/components/route-map/RouteMapView';
+import { CongestionPanel } from '@/components/congestion/CongestionPanel';
+import { UpcomingTrains } from '@/components/arrival/UpcomingTrains';
+import { PushNotificationToggle } from '@/components/push/PushNotificationToggle';
+import { TrainPosition } from '@/types';
 
 export default function Home() {
+  const { route, isTracking } = useRouteStore();
+  const { progress, setProgress, setError } = useTrackingStore();
+
+  // 현재 추적 중인 구간
+  const currentSegment = route?.segments[progress?.currentSegmentIndex ?? 0];
+  const currentLine = currentSegment?.line ?? '6호선';
+  const currentStation = progress?.currentStationName ?? route?.segments[0]?.fromStation.name ?? '태릉입구';
+
+  // 실시간 열차 위치 폴링 (5초)
+  const { data: line6Trains } = useRealtimePosition('6호선', isTracking);
+  const { data: line3Trains } = useRealtimePosition('3호선', isTracking);
+
+  // 실시간 도착 정보 폴링 (10초)
+  const { data: arrivalData } = useRealtimeArrival(currentStation, isTracking);
+
+  // 칸별 혼잡도 (30초)
+  const { data: congestion, isLoading: congestionLoading } = useCongestion(
+    currentLine, currentStation, isTracking
+  );
+
+  // 열차 위치 업데이트 처리
+  useEffect(() => {
+    if (!isTracking || !route) return;
+
+    const segmentIndex = progress?.currentSegmentIndex ?? 0;
+    const segment = route.segments[segmentIndex];
+    if (!segment) return;
+
+    const trains = segmentIndex === 0 ? line6Trains : line3Trains;
+    if (!trains || trains.length === 0) return;
+
+    // 현재 경로 방향과 일치하는 열차 필터링
+    const directionCode = segment.direction === 'up' ? '0' : '1';
+    const routeStationNames = segment.stations.map(s => s.name);
+
+    const matchingTrains = trains.filter((t: TrainPosition) => {
+      const matchesDirection = t.updnLine === directionCode;
+      const onRoute = routeStationNames.includes(t.statnNm);
+      return matchesDirection && onRoute;
+    });
+
+    if (matchingTrains.length > 0) {
+      // 출발역에서 가장 가까운 열차 선택
+      const fromIdx = segment.stations.findIndex(s => s.name === segment.fromStation.name);
+      let bestTrain = matchingTrains[0];
+      let bestDistance = Infinity;
+
+      for (const train of matchingTrains) {
+        const trainIdx = segment.stations.findIndex(s => s.name === train.statnNm);
+        const distance = Math.abs(trainIdx - fromIdx);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          bestTrain = train;
+        }
+      }
+
+      const newProgress = calculateProgress(
+        route,
+        bestTrain.statnNm,
+        bestTrain.trainSttus,
+        segmentIndex,
+        false,
+      );
+
+      setProgress(newProgress);
+    }
+  }, [line6Trains, line3Trains, isTracking, route, progress?.currentSegmentIndex, setProgress]);
+
+  // ETA 계산
+  const eta = useMemo(() => {
+    if (!arrivalData || arrivalData.length === 0) return null;
+
+    // 현재 경로 방향과 일치하는 도착 정보 찾기
+    const relevantArrival = arrivalData[0];
+    if (!relevantArrival) return null;
+
+    const seconds = parseInt(relevantArrival.barvlDt, 10);
+    if (isNaN(seconds)) return null;
+
+    // recptnDt 보정
+    const recptnTime = new Date(relevantArrival.recptnDt).getTime();
+    const now = Date.now();
+    const elapsed = Math.max(0, (now - recptnTime) / 1000);
+
+    return Math.max(0, Math.round(seconds - elapsed));
+  }, [arrivalData]);
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
+    <main className="min-h-screen bg-gray-50">
+      {/* 헤더 */}
+      <header className="bg-white shadow-sm border-b border-gray-100">
+        <div className="max-w-3xl mx-auto px-4 py-4">
+          <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+            🚇 서울 지하철 실시간 추적
           </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+          <p className="text-xs text-gray-400 mt-1">배달의민족처럼 내 열차를 실시간으로 확인하세요</p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+      </header>
+
+      <div className="max-w-3xl mx-auto px-4 py-6 space-y-4">
+        {/* 출발/도착역 검색 */}
+        <StationSearch />
+
+        {/* 태릉입구역 실시간 도착 정보 */}
+        <UpcomingTrains
+          station="태릉입구"
+          targetLine="6호선"
+          targetDirection="up"
+          directionLabel="약수·이태원 방면"
+        />
+
+        {/* 출근 알림 설정 */}
+        <PushNotificationToggle />
+
+        {/* 노선도 시각화 */}
+        {route && (
+          <RouteMapView
+            route={route}
+            tracking={progress}
+          />
+        )}
+
+        {/* 칸별 혼잡도 */}
+        {isTracking && (
+          <CongestionPanel
+            congestion={congestion ?? null}
+            isLoading={congestionLoading}
+          />
+        )}
+
+        {/* 하단 정보 */}
+        {route && !isTracking && (
+          <div className="text-center py-8">
+            <p className="text-gray-400 text-sm">
+              총 {route.totalStations}개 역 | 예상 소요시간 약 {route.totalEstimatedMinutes}분
+            </p>
+            <p className="text-gray-300 text-xs mt-1">
+              6호선 {route.segments[0].stations.length - 1}역 + 환승 + 3호선 {route.segments[1]?.stations.length ? route.segments[1].stations.length - 1 : 0}역
+            </p>
+          </div>
+        )}
+      </div>
+    </main>
   );
 }
