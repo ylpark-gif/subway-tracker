@@ -1,56 +1,143 @@
 import { Route, RouteSegment, TransferInfo } from '@/types';
+import { SubwayLine } from '@/types/route';
 import { LINE_6_STATIONS, LINE_3_STATIONS, getStationsBetween } from '@/constants/stations';
 import { LINE_COLORS, LINE_IDS } from '@/constants/lines';
 import { TRANSFER_WALKING_MINUTES } from '@/constants/config';
 
+function findStationLine(name: string): SubwayLine | null {
+  if (LINE_6_STATIONS.find(s => s.name === name)) return '6호선';
+  if (LINE_3_STATIONS.find(s => s.name === name)) return '3호선';
+  return null;
+}
+
+function getDirection(fromName: string, toName: string, line: SubwayLine): 'up' | 'down' {
+  const stations = line === '6호선' ? LINE_6_STATIONS : LINE_3_STATIONS;
+  const fromIdx = stations.findIndex(s => s.name === fromName);
+  const toIdx = stations.findIndex(s => s.name === toName);
+  // 6호선: index 감소 = 상행(응암순환), 3호선: index 감소 = 상행(대화방면)
+  return fromIdx > toIdx ? 'up' : 'down';
+}
+
 export function calculateRoute(fromName: string, toName: string): Route | null {
-  // 태릉입구(6호선) → 약수(환승) → 매봉(3호선) 경로
-  // 6호선에서 태릉입구→약수 방향은 index가 감소하는 방향 (35→23)
+  if (fromName === toName) return null;
 
-  const line6From = LINE_6_STATIONS.find(s => s.name === fromName);
-  const line6Transfer = LINE_6_STATIONS.find(s => s.name === '약수');
-  const line3Transfer = LINE_3_STATIONS.find(s => s.name === '약수');
-  const line3To = LINE_3_STATIONS.find(s => s.name === toName);
+  const fromLine = findStationLine(fromName);
+  const toLine = findStationLine(toName);
 
-  if (!line6From || !line6Transfer || !line3Transfer || !line3To) {
-    return null;
+  if (!fromLine || !toLine) return null;
+
+  // Case 1: 동일 노선
+  if (fromLine === toLine) {
+    return buildSingleLineRoute(fromName, toName, fromLine);
   }
 
-  // 6호선 구간: 태릉입구(idx:35) → 약수(idx:23) - index 감소 = 상행(내선순환)
-  const segment1Stations = getStationsBetween(fromName, '약수', '6호선');
-  // 3호선 구간: 약수(idx:24) → 매봉(idx:34) - index 증가 = 하행(오금방면)
-  const segment2Stations = getStationsBetween('약수', toName, '3호선');
+  // Case 2: 6호선 → 3호선 (약수 환승)
+  if (fromLine === '6호선' && toLine === '3호선') {
+    return buildTransferRoute(fromName, toName, '6호선', '3호선', '약수');
+  }
+
+  // Case 3: 3호선 → 6호선 (약수 환승)
+  if (fromLine === '3호선' && toLine === '6호선') {
+    return buildTransferRoute(fromName, toName, '3호선', '6호선', '약수');
+  }
+
+  // Case 4: 양쪽 노선 모두에 있는 역 (환승역이 출발/도착인 경우)
+  const fromOnBoth = LINE_6_STATIONS.find(s => s.name === fromName) && LINE_3_STATIONS.find(s => s.name === fromName);
+  const toOnBoth = LINE_6_STATIONS.find(s => s.name === toName) && LINE_3_STATIONS.find(s => s.name === toName);
+
+  if (fromOnBoth) {
+    // 출발역이 환승역: 도착역 노선에 맞춰 동일노선 처리
+    return buildSingleLineRoute(fromName, toName, toLine);
+  }
+  if (toOnBoth) {
+    return buildSingleLineRoute(fromName, toName, fromLine);
+  }
+
+  return null;
+}
+
+function buildSingleLineRoute(fromName: string, toName: string, line: SubwayLine): Route | null {
+  const stations = line === '6호선' ? LINE_6_STATIONS : LINE_3_STATIONS;
+  const from = stations.find(s => s.name === fromName);
+  const to = stations.find(s => s.name === toName);
+  if (!from || !to) return null;
+
+  const segStations = getStationsBetween(fromName, toName, line);
+  if (segStations.length === 0) return null;
+
+  const direction = getDirection(fromName, toName, line);
+
+  const segment: RouteSegment = {
+    line,
+    lineId: LINE_IDS[line],
+    lineColor: LINE_COLORS[line],
+    direction,
+    fromStation: from,
+    toStation: to,
+    stations: segStations,
+    estimatedMinutes: (segStations.length - 1) * 2,
+  };
+
+  return {
+    segments: [segment],
+    transfers: [],
+    totalStations: segStations.length - 1,
+    totalEstimatedMinutes: segment.estimatedMinutes,
+  };
+}
+
+function buildTransferRoute(
+  fromName: string,
+  toName: string,
+  fromLine: SubwayLine,
+  toLine: SubwayLine,
+  transferStation: string,
+): Route | null {
+  const fromStations = fromLine === '6호선' ? LINE_6_STATIONS : LINE_3_STATIONS;
+  const toStations = toLine === '6호선' ? LINE_6_STATIONS : LINE_3_STATIONS;
+
+  const from = fromStations.find(s => s.name === fromName);
+  const transferFrom = fromStations.find(s => s.name === transferStation);
+  const transferTo = toStations.find(s => s.name === transferStation);
+  const to = toStations.find(s => s.name === toName);
+
+  if (!from || !transferFrom || !transferTo || !to) return null;
+
+  const seg1Stations = getStationsBetween(fromName, transferStation, fromLine);
+  const seg2Stations = getStationsBetween(transferStation, toName, toLine);
+
+  if (seg1Stations.length === 0 || seg2Stations.length === 0) return null;
 
   const segment1: RouteSegment = {
-    line: '6호선',
-    lineId: LINE_IDS['6호선'],
-    lineColor: LINE_COLORS['6호선'],
-    direction: 'up', // 내선순환 (index 감소 방향)
-    fromStation: line6From,
-    toStation: line6Transfer,
-    stations: segment1Stations,
-    estimatedMinutes: (segment1Stations.length - 1) * 2, // 역당 약 2분
+    line: fromLine,
+    lineId: LINE_IDS[fromLine],
+    lineColor: LINE_COLORS[fromLine],
+    direction: getDirection(fromName, transferStation, fromLine),
+    fromStation: from,
+    toStation: transferFrom,
+    stations: seg1Stations,
+    estimatedMinutes: (seg1Stations.length - 1) * 2,
   };
 
   const segment2: RouteSegment = {
-    line: '3호선',
-    lineId: LINE_IDS['3호선'],
-    lineColor: LINE_COLORS['3호선'],
-    direction: 'down', // 오금 방면 (index 증가 방향)
-    fromStation: line3Transfer,
-    toStation: line3To,
-    stations: segment2Stations,
-    estimatedMinutes: (segment2Stations.length - 1) * 2,
+    line: toLine,
+    lineId: LINE_IDS[toLine],
+    lineColor: LINE_COLORS[toLine],
+    direction: getDirection(transferStation, toName, toLine),
+    fromStation: transferTo,
+    toStation: to,
+    stations: seg2Stations,
+    estimatedMinutes: (seg2Stations.length - 1) * 2,
   };
 
   const transfer: TransferInfo = {
-    station: line6Transfer,
-    fromLine: '6호선',
-    toLine: '3호선',
-    walkingMinutes: TRANSFER_WALKING_MINUTES['약수'] || 3,
+    station: transferFrom,
+    fromLine,
+    toLine,
+    walkingMinutes: TRANSFER_WALKING_MINUTES[transferStation] || 3,
   };
 
-  const totalStations = (segment1Stations.length - 1) + (segment2Stations.length - 1);
+  const totalStations = (seg1Stations.length - 1) + (seg2Stations.length - 1);
 
   return {
     segments: [segment1, segment2],
@@ -64,13 +151,13 @@ export function calculateRoute(fromName: string, toName: string): Route | null {
 export interface TrackingProgress {
   currentSegmentIndex: number;
   currentStationName: string;
-  trainStatus: string; // '0'=진입, '1'=도착, '2'=출발
+  trainStatus: string;
   stationsPassed: number;
   stationsRemaining: number;
-  progress: number; // 0~100
+  progress: number;
   isTransferring: boolean;
   statusMessage: string;
-  eta: number | null; // 도착 예정 초
+  eta: number | null;
 }
 
 export function calculateProgress(
@@ -82,12 +169,10 @@ export function calculateProgress(
 ): TrackingProgress {
   let stationsPassed = 0;
 
-  // 완료된 구간의 역 수
   for (let i = 0; i < segmentIndex; i++) {
     stationsPassed += route.segments[i].stations.length - 1;
   }
 
-  // 현재 구간에서 지나온 역 수
   if (!isTransferring && segmentIndex < route.segments.length) {
     const currentSegment = route.segments[segmentIndex];
     const stationIdx = currentSegment.stations.findIndex(s => s.name === currentStation);
@@ -96,17 +181,18 @@ export function calculateProgress(
     }
   }
 
-  // trainSttus 기반 미세 조정
   const statusOffset: Record<string, number> = { '0': 0.3, '1': 0.5, '2': 0.8 };
   const offset = statusOffset[trainStatus] || 0;
 
   const progress = Math.min(100, ((stationsPassed + offset) / route.totalStations) * 100);
   const stationsRemaining = route.totalStations - stationsPassed;
 
-  // 상태 메시지 생성
   let statusMessage = '';
   if (isTransferring) {
-    statusMessage = '약수역에서 3호선으로 환승하세요!';
+    const transfer = route.transfers[0];
+    statusMessage = transfer
+      ? `${transfer.station.name}역에서 ${transfer.toLine}으로 환승하세요!`
+      : '환승 중...';
   } else {
     const statusMessages: Record<string, string> = {
       '0': `열차가 ${currentStation}역에 들어가고 있어요!`,
