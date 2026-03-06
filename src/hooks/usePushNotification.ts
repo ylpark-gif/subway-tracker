@@ -36,20 +36,20 @@ export function usePushNotification() {
     checkState();
   }, []);
 
-  const subscribe = useCallback(async () => {
+  const subscribe = useCallback(async (
+    routeData?: { departure: string; arrival: string; departureLineId: string; departureDirection: string },
+    scheduleData?: { enabled: boolean; days: number[]; startTimeKST: string; endTimeKST: string; intervalMinutes: number },
+  ) => {
     try {
-      // 서비스워커 등록
       const registration = await navigator.serviceWorker.register('/sw.js');
       await navigator.serviceWorker.ready;
 
-      // 알림 권한 요청
       const permission = await Notification.requestPermission();
       if (permission === 'denied') {
         setState('denied');
         return false;
       }
 
-      // Push 구독
       const vapidKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
       if (!vapidKey) {
         console.error('VAPID public key not found');
@@ -61,11 +61,14 @@ export function usePushNotification() {
         applicationServerKey: urlBase64ToUint8Array(vapidKey).buffer as ArrayBuffer,
       });
 
-      // 서버에 구독 정보 전송
+      const body: any = { ...subscription.toJSON() };
+      if (routeData) body.route = routeData;
+      if (scheduleData) body.schedule = scheduleData;
+
       const res = await fetch('/api/push/subscribe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(subscription.toJSON()),
+        body: JSON.stringify(body),
       });
 
       if (res.ok) {
@@ -75,6 +78,31 @@ export function usePushNotification() {
       return false;
     } catch (err) {
       console.error('Push subscription failed:', err);
+      return false;
+    }
+  }, []);
+
+  const updateRouteSchedule = useCallback(async (
+    routeData: { departure: string; arrival: string; departureLineId: string; departureDirection: string },
+    scheduleData: { enabled: boolean; days: number[]; startTimeKST: string; endTimeKST: string; intervalMinutes: number },
+  ) => {
+    try {
+      const registration = await navigator.serviceWorker.getRegistration('/sw.js');
+      if (!registration) return false;
+      const subscription = await registration.pushManager.getSubscription();
+      if (!subscription) return false;
+
+      const res = await fetch('/api/push/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...subscription.toJSON(),
+          route: routeData,
+          schedule: scheduleData,
+        }),
+      });
+      return res.ok;
+    } catch {
       return false;
     }
   }, []);
@@ -104,7 +132,7 @@ export function usePushNotification() {
     }
   }, []);
 
-  return { state, subscribe, unsubscribe, testNotification };
+  return { state, subscribe, unsubscribe, testNotification, updateRouteSchedule };
 }
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array {

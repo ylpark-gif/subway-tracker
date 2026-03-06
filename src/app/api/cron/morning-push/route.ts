@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getWebPush, getArrivalInfo } from '@/lib/pushService';
-import { loadSubscriptions, saveSubscriptions } from '@/lib/subscriptionStore';
+import { loadSubscriptions } from '@/lib/subscriptionStore';
 
 const HOLIDAYS_2026 = [
   '20260101', '20260216', '20260217', '20260218', '20260301',
@@ -19,7 +18,6 @@ function isKoreanHoliday(): boolean {
 
 export async function GET(request: NextRequest) {
   try {
-    // Vercel Cron 인증
     const authHeader = request.headers.get('authorization');
     if (
       process.env.CRON_SECRET &&
@@ -33,30 +31,37 @@ export async function GET(request: NextRequest) {
     }
 
     const subs = await loadSubscriptions();
-
     if (subs.length === 0) {
       return NextResponse.json({ error: 'No subscriptions' }, { status: 404 });
     }
 
-    const webpush = getWebPush();
-    const arrivalMsg = await getArrivalInfo();
+    const now = new Date();
+    const kstDay = new Date(now.getTime() + 9 * 60 * 60 * 1000).getUTCDay();
 
-    const payload = JSON.stringify({
-      title: '🚇 출근 열차 도착 알림',
-      body: arrivalMsg,
+    // 스케줄 요일 체크 (구독자 중 하나라도 해당 요일이면 진행)
+    const hasActiveSchedule = subs.some((sub: any) => {
+      if (!sub.schedule?.enabled) return true; // 스케줄 없으면 기본 발송
+      return sub.schedule.days.includes(kstDay);
     });
 
-    const results = await Promise.allSettled(
-      subs.map(sub => webpush.sendNotification(sub, payload))
-    );
+    if (!hasActiveSchedule) {
+      return NextResponse.json({ skipped: true, reason: 'no active schedule today' });
+    }
 
-    const validSubs = subs.filter((_: any, i: number) => results[i].status === 'fulfilled');
-    await saveSubscriptions(validSubs);
+    // repeat-send 엔드포인트로 위임 (10초 간격 반복 푸시)
+    const endTimeKST = subs[0]?.schedule?.endTimeKST ?? '08:50';
+    const baseUrl = process.env.VERCEL_URL
+      ? `https://${process.env.VERCEL_URL}`
+      : 'http://localhost:3000';
 
-    return NextResponse.json({
-      sent: results.filter(r => r.status === 'fulfilled').length,
-      failed: results.filter(r => r.status === 'rejected').length,
-    });
+    // fire-and-forget: repeat-send 시작
+    fetch(`${baseUrl}/api/push/repeat-send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endTimeKST }),
+    }).catch(() => {});
+
+    return NextResponse.json({ triggered: true, endTimeKST });
   } catch (err: any) {
     return NextResponse.json({ error: err.message, stack: err.stack }, { status: 500 });
   }

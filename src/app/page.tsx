@@ -12,6 +12,7 @@ import { RouteMapView } from '@/components/route-map/RouteMapView';
 import { CongestionPanel } from '@/components/congestion/CongestionPanel';
 import { UpcomingTrains } from '@/components/arrival/UpcomingTrains';
 import { PushNotificationToggle } from '@/components/push/PushNotificationToggle';
+import { SaveRouteSchedule } from '@/components/push/SaveRouteSchedule';
 import { TrainPosition } from '@/types';
 import { LINE_6_STATIONS, LINE_3_STATIONS } from '@/constants/stations';
 
@@ -29,8 +30,24 @@ function getStationLine(name: string): string {
 }
 
 export default function Home() {
-  const { departure, route, isTracking } = useRouteStore();
+  const { departure, route, isTracking, setStations, startTracking } = useRouteStore();
   const { progress, setProgress } = useTrackingStore();
+
+  // URL 파라미터 자동 로드 (알림 클릭 → 앱 열기)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const from = params.get('from');
+    const to = params.get('to');
+    const autotrack = params.get('autotrack');
+
+    if (from && to) {
+      setStations(from, to);
+      if (autotrack === '1') {
+        startTracking();
+      }
+      window.history.replaceState({}, '', '/');
+    }
+  }, [setStations, startTracking]);
 
   // 첫 번째 세그먼트 기준 방향
   const firstSegment = route?.segments[0];
@@ -144,6 +161,9 @@ export default function Home() {
             isLoading={congestionLoading}
           />
         )}
+
+        {/* 출근 알림 설정 */}
+        {route && !isTracking && <SaveRouteSchedule />}
 
         {/* 하단 정보 */}
         {route && !isTracking && (

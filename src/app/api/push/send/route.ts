@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getWebPush, getArrivalInfo } from '@/lib/pushService';
+import { getWebPush, getArrivalInfoForRoute } from '@/lib/pushService';
 import { loadSubscriptions, saveSubscriptions } from '@/lib/subscriptionStore';
 
 export async function POST() {
@@ -11,15 +11,30 @@ export async function POST() {
     }
 
     const webpush = getWebPush();
-    const arrivalMsg = await getArrivalInfo();
-
-    const payload = JSON.stringify({
-      title: '🚇 태릉입구역 열차 도착 알림',
-      body: arrivalMsg,
-    });
 
     const results = await Promise.allSettled(
-      subs.map(sub => webpush.sendNotification(sub, payload))
+      subs.map(async (sub: any) => {
+        const departure = sub.route?.departure ?? '태릉입구';
+        const arrival = sub.route?.arrival ?? '매봉';
+        const lineId = sub.route?.departureLineId ?? '1006';
+        const direction = sub.route?.departureDirection ?? '상행';
+
+        const arrivalMsg = await getArrivalInfoForRoute(departure, lineId, direction);
+
+        const payload = JSON.stringify({
+          title: `🚇 ${departure}→${arrival} 열차 도착 알림`,
+          body: arrivalMsg,
+          data: {
+            type: 'scheduled-push',
+            departure,
+            arrival,
+            scheduleEnd: sub.schedule?.endTimeKST ?? '08:50',
+            intervalMs: (sub.schedule?.intervalMinutes ?? 5) * 60 * 1000,
+          },
+        });
+
+        return webpush.sendNotification(sub, payload);
+      })
     );
 
     // 410 Gone만 구독 삭제 (만료된 구독), 일시적 에러는 유지

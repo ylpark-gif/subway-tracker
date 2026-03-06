@@ -74,9 +74,11 @@ export async function saveSubscriptions(subs: any[]): Promise<void> {
 
 export async function addSubscription(subscription: any): Promise<void> {
   const subs = await loadSubscriptions();
-  const exists = subs.some((s: any) => s.endpoint === subscription.endpoint);
-  if (!exists) {
+  const existingIdx = subs.findIndex((s: any) => s.endpoint === subscription.endpoint);
+  if (existingIdx >= 0) {
+    subs[existingIdx] = { ...subs[existingIdx], ...subscription };
+  } else {
     subs.push(subscription);
-    await saveSubscriptions(subs);
   }
+  await saveSubscriptions(subs);
 }
