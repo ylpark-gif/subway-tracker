@@ -37,7 +37,7 @@ self.addEventListener('push', (event) => {
   );
 });
 
-// 후속 알림 스케줄링 (10초 간격, 같은 tag로 덮어씌워 업데이트)
+// 후속 알림 스케줄링 (10초 간격, async 루프로 waitUntil 유지)
 async function scheduleFollowUps(config) {
   const { departure, arrival, scheduleEnd } = config;
   if (!scheduleEnd) return;
@@ -52,48 +52,52 @@ async function scheduleFollowUps(config) {
   const remaining = endTime.getTime() - now.getTime();
   const maxUpdates = Math.min(Math.floor(remaining / INTERVAL), 90);
 
+  // async 루프: await로 waitUntil promise를 살려둠 → SW가 종료되지 않음
   for (let i = 1; i <= maxUpdates; i++) {
-    setTimeout(async () => {
-      try {
-        const res = await fetch(`/api/realtime-arrival?station=${encodeURIComponent(departure)}`);
-        const data = await res.json();
-        const arrivals = data.realtimeArrivalList ?? [];
+    await sleep(INTERVAL);
+    try {
+      const res = await fetch(`/api/realtime-arrival?station=${encodeURIComponent(departure)}`);
+      const data = await res.json();
+      const arrivals = data.realtimeArrivalList ?? [];
 
-        const relevant = arrivals
-          .filter(a => a.updnLine === '상행')
-          .sort((a, b) => parseInt(a.barvlDt) - parseInt(b.barvlDt));
+      const relevant = arrivals
+        .filter(a => a.updnLine === '상행')
+        .sort((a, b) => parseInt(a.barvlDt) - parseInt(b.barvlDt));
 
-        let body = `${departure}역 접근 중인 열차 없음`;
-        if (relevant.length > 0) {
-          const first = relevant[0];
-          const sec = parseInt(first.barvlDt);
-          const min = Math.floor(sec / 60);
-          const secR = sec % 60;
-          body = `첫 열차: ${min}분 ${secR}초 후 (${first.arvlMsg3})`;
-          if (relevant.length > 1) {
-            const sec2 = parseInt(relevant[1].barvlDt);
-            const min2 = Math.floor(sec2 / 60);
-            body += `\n다음: ${min2}분 후 (${relevant[1].arvlMsg3})`;
-          }
+      let body = `${departure}역 접근 중인 열차 없음`;
+      if (relevant.length > 0) {
+        const first = relevant[0];
+        const sec = parseInt(first.barvlDt);
+        const min = Math.floor(sec / 60);
+        const secR = sec % 60;
+        body = `첫 열차: ${min}분 ${secR}초 후 (${first.arvlMsg3})`;
+        if (relevant.length > 1) {
+          const sec2 = parseInt(relevant[1].barvlDt);
+          const min2 = Math.floor(sec2 / 60);
+          body += `\n다음: ${min2}분 후 (${relevant[1].arvlMsg3})`;
         }
-
-        self.registration.showNotification(
-          `🚇 ${departure}→${arrival} 열차 도착 알림`,
-          {
-            body,
-            icon: '/icons/icon.svg',
-            badge: '/icons/icon.svg',
-            tag: 'subway-arrival',
-            renotify: true,
-            requireInteraction: true,
-            data: { url: '/', departure, arrival },
-          }
-        );
-      } catch (e) {
-        console.error('Follow-up notification failed:', e);
       }
-    }, i * INTERVAL);
+
+      await self.registration.showNotification(
+        `🚇 ${departure}→${arrival} 열차 도착 알림`,
+        {
+          body,
+          icon: '/icons/icon.svg',
+          badge: '/icons/icon.svg',
+          tag: 'subway-arrival',
+          renotify: true,
+          requireInteraction: true,
+          data: { url: '/', departure, arrival },
+        }
+      );
+    } catch (e) {
+      console.error('Follow-up notification failed:', e);
+    }
   }
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 // 알림 클릭 시 앱 열기 (딥링크)
